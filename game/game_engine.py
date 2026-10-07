@@ -8,6 +8,7 @@ BLACK = (0, 0, 0)
 GRAY = (90, 90, 90)
 GREEN = (40, 180, 90)
 BLUE = (50, 90, 170)
+RED = (190, 55, 55)
 
 class GameEngine:
     def __init__(self, width, height, rounds_total=5, min_wait_ms=1000, max_wait_ms=3000):
@@ -22,7 +23,8 @@ class GameEngine:
         self.reaction_times = []
 
         self.result_shown_at = None
-        self.result_pause_ms = 800  # brief pause on the result screen between rounds
+        self.result_pause_ms = 800        # pause on the result screen between rounds
+        self.false_start_pause_ms = 1200  # pause on the "too early" screen
 
         self.font = pygame.font.SysFont("Arial", 30)
         self.big_font = pygame.font.SysFont("Arial", 46)
@@ -33,10 +35,19 @@ class GameEngine:
             return
         is_click = event.type == pygame.MOUSEBUTTONDOWN
         is_space = event.type == pygame.KEYDOWN and event.key == pygame.K_SPACE
-        if (is_click or is_space) and self.round.state != "result":
-            reaction_ms = self.round.register_input()
+        if not (is_click or is_space):
+            return
+        # Only react while the round is still live; ignore input during the
+        # result / false-start pause screens.
+        if self.round.state not in ("waiting", "go"):
+            return
+
+        reaction_ms = self.round.register_input()
+        self.result_shown_at = pygame.time.get_ticks()
+        # A false start returns None: it is shown to the player but is NOT
+        # recorded, so it doesn't use up one of the rounds.
+        if reaction_ms is not None:
             self.reaction_times.append(reaction_ms)
-            self.result_shown_at = pygame.time.get_ticks()
 
     def handle_input(self):
         # Reserved for continuously-held-key input; every action here
@@ -49,10 +60,13 @@ class GameEngine:
 
         self.round.update()
 
+        now = pygame.time.get_ticks()
         if self.round.state == "result":
-            now = pygame.time.get_ticks()
             if now - self.result_shown_at >= self.result_pause_ms:
                 self._start_next_round()
+        elif self.round.state == "false_start":
+            if now - self.result_shown_at >= self.false_start_pause_ms:
+                self._start_next_round()  # same round number, fresh random delay
 
     def _start_next_round(self):
         if len(self.reaction_times) >= self.rounds_total:
@@ -66,12 +80,17 @@ class GameEngine:
         return round(sum(self.reaction_times) / len(self.reaction_times))
 
     def render(self, screen):
+        sub_message = None
         if self.round.state == "waiting":
             bg = GRAY
             message = "Wait for green..."
         elif self.round.state == "go":
             bg = GREEN
             message = "Click now!"
+        elif self.round.state == "false_start":
+            bg = RED
+            message = "Too early!"
+            sub_message = "False start - this round will be redone"
         else:
             bg = BLUE
             message = f"{self.round.reaction_ms} ms"
@@ -81,6 +100,11 @@ class GameEngine:
         text_surf = self.big_font.render(message, True, WHITE)
         text_rect = text_surf.get_rect(center=(self.width // 2, self.height // 2))
         screen.blit(text_surf, text_rect)
+
+        if sub_message:
+            sub_surf = self.font.render(sub_message, True, WHITE)
+            sub_rect = sub_surf.get_rect(center=(self.width // 2, self.height // 2 + 50))
+            screen.blit(sub_surf, sub_rect)
 
         round_num = min(len(self.reaction_times) + 1, self.rounds_total)
         round_text = self.font.render(f"Round {round_num}/{self.rounds_total}", True, WHITE)
