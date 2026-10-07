@@ -12,32 +12,60 @@ RED = (190, 55, 55)
 LIGHT_GREEN = (150, 235, 170)
 LIGHT_RED = (255, 170, 170)
 
+# Difficulty presets. Hard = more rounds and a wider, less predictable wait.
+DIFFICULTIES = {
+    "Easy":   {"rounds_total": 3, "min_wait_ms": 1000, "max_wait_ms": 2000},
+    "Medium": {"rounds_total": 5, "min_wait_ms": 1000, "max_wait_ms": 3000},
+    "Hard":   {"rounds_total": 8, "min_wait_ms": 500,  "max_wait_ms": 5000},
+}
+DEFAULT_DIFFICULTY = "Medium"
+
+# Keys (start menu and results screen) that start a new session.
+DIFFICULTY_KEYS = {
+    pygame.K_1: "Easy",   pygame.K_e: "Easy",
+    pygame.K_2: "Medium", pygame.K_m: "Medium",
+    pygame.K_3: "Hard",   pygame.K_h: "Hard",
+}
+EXIT_KEYS = (pygame.K_ESCAPE, pygame.K_q)
+
+
 class GameEngine:
-    def __init__(self, width, height, rounds_total=5, min_wait_ms=1000, max_wait_ms=3000):
+    def __init__(self, width, height, difficulty=DEFAULT_DIFFICULTY):
         self.width = width
         self.height = height
 
-        self.rounds_total = rounds_total
-        self.min_wait_ms = min_wait_ms
-        self.max_wait_ms = max_wait_ms
-
-        self.round = Round(self.min_wait_ms, self.max_wait_ms)
-        self.reaction_times = []
-
-        self.result_shown_at = None
         self.result_pause_ms = 800        # pause on the result screen between rounds
         self.false_start_pause_ms = 1200  # pause on the "too early" screen
+        # Ignore input briefly after the results appear so a late/mashed click
+        # from the last round can't trigger a choice before it's seen.
+        self.results_lockout_ms = 600
 
         self.font = pygame.font.SysFont("Arial", 30)
         self.big_font = pygame.font.SysFont("Arial", 46)
         self.small_font = pygame.font.SysFont("Arial", 24)
+
+        self.start_session(difficulty)
+        self.in_menu = True  # show the start screen first; a choice starts the session
+
+    def start_session(self, difficulty):
+        """(Re)initialise all per-session state for the chosen difficulty."""
+        settings = DIFFICULTIES[difficulty]
+        self.difficulty = difficulty
+        self.rounds_total = settings["rounds_total"]
+        self.min_wait_ms = settings["min_wait_ms"]
+        self.max_wait_ms = settings["max_wait_ms"]
+
+        self.round = Round(self.min_wait_ms, self.max_wait_ms)
+        self.reaction_times = []
+        self.result_shown_at = None
         self.game_over = False
         self.game_over_at = None
-        # Ignore input briefly after the results appear so a late/mashed click
-        # from the last round can't dismiss the screen before it's seen.
-        self.results_lockout_ms = 600
+        self.in_menu = False
 
     def handle_event(self, event):
+        if self.in_menu:
+            self._handle_menu_event(event)
+            return
         if self.game_over:
             self._handle_results_event(event)
             return
@@ -57,13 +85,25 @@ class GameEngine:
         if reaction_ms is not None:
             self.reaction_times.append(reaction_ms)
 
+    def _handle_menu_event(self, event):
+        # Start screen: pick a difficulty to begin, or exit.
+        if event.type != pygame.KEYDOWN:
+            return
+        if event.key in DIFFICULTY_KEYS:
+            self.start_session(DIFFICULTY_KEYS[event.key])
+        elif event.key in EXIT_KEYS:
+            pygame.event.post(pygame.event.Event(pygame.QUIT))
+
     def _handle_results_event(self, event):
-        # Wait for the player: any key press or click closes the game cleanly
-        # (main.py's loop handles pygame.QUIT). Task 3 will replace this with
-        # a replay / difficulty choice.
+        # Results screen: pick a difficulty to play again, or exit.
         if pygame.time.get_ticks() - self.game_over_at < self.results_lockout_ms:
             return
-        if event.type in (pygame.KEYDOWN, pygame.MOUSEBUTTONDOWN):
+        if event.type != pygame.KEYDOWN:
+            return
+        if event.key in DIFFICULTY_KEYS:
+            self.start_session(DIFFICULTY_KEYS[event.key])
+        elif event.key in EXIT_KEYS:
+            # main.py's loop handles pygame.QUIT and shuts down cleanly.
             pygame.event.post(pygame.event.Event(pygame.QUIT))
 
     def handle_input(self):
@@ -72,7 +112,7 @@ class GameEngine:
         pass
 
     def update(self):
-        if self.game_over:
+        if self.in_menu or self.game_over:
             return
 
         self.round.update()
@@ -96,6 +136,32 @@ class GameEngine:
         if not self.reaction_times:
             return 0
         return round(sum(self.reaction_times) / len(self.reaction_times))
+
+    def render_menu(self, screen):
+        screen.fill(BLUE)
+        cx = self.width // 2
+
+        title = self.big_font.render("Reaction Time Tester", True, WHITE)
+        screen.blit(title, title.get_rect(center=(cx, 60)))
+
+        for j, text in enumerate(("Wait for green, then click or press Space.",
+                                  "Reacting too early is a false start.")):
+            how_to = self.small_font.render(text, True, WHITE)
+            screen.blit(how_to, how_to.get_rect(center=(cx, 105 + j * 28)))
+
+        for i, (name, cfg) in enumerate(DIFFICULTIES.items()):
+            y = 190 + i * 50
+            label = self.font.render(f"{i + 1}   {name}", True, WHITE)
+            screen.blit(label, label.get_rect(midleft=(110, y)))
+            detail = self.small_font.render(
+                f"{cfg['rounds_total']} rounds, "
+                f"{cfg['min_wait_ms'] / 1000:.1f}-{cfg['max_wait_ms'] / 1000:.1f} s wait",
+                True, WHITE)
+            screen.blit(detail, detail.get_rect(midleft=(290, y)))
+
+        prompt = self.small_font.render(
+            "Choose a difficulty:  1 / 2 / 3        Esc: Exit", True, WHITE)
+        screen.blit(prompt, prompt.get_rect(center=(cx, 360)))
 
     def render_results(self, screen):
         screen.fill(BLUE)
@@ -123,15 +189,19 @@ class GameEngine:
         avg = self.big_font.render(f"Average: {self.average_reaction_ms()} ms", True, WHITE)
         screen.blit(avg, avg.get_rect(center=(cx, 305)))
 
-        summary = self.small_font.render(f"Best: {best} ms     Worst: {worst} ms", True, WHITE)
+        summary = self.small_font.render(
+            f"{self.difficulty}   |   Best: {best} ms   |   Worst: {worst} ms", True, WHITE)
         screen.blit(summary, summary.get_rect(center=(cx, 345)))
 
         locked = pygame.time.get_ticks() - self.game_over_at < self.results_lockout_ms
-        prompt_text = "" if locked else "Press any key or click to exit"
+        prompt_text = "" if locked else "Play again:  1 Easy   2 Medium   3 Hard      Esc: Exit"
         prompt = self.small_font.render(prompt_text, True, WHITE)
         screen.blit(prompt, prompt.get_rect(center=(cx, 378)))
 
     def render(self, screen):
+        if self.in_menu:
+            self.render_menu(screen)
+            return
         if self.game_over:
             self.render_results(screen)
             return
@@ -165,6 +235,9 @@ class GameEngine:
         round_num = min(len(self.reaction_times) + 1, self.rounds_total)
         round_text = self.font.render(f"Round {round_num}/{self.rounds_total}", True, WHITE)
         screen.blit(round_text, (10, 10))
+
+        diff_text = self.small_font.render(self.difficulty, True, WHITE)
+        screen.blit(diff_text, diff_text.get_rect(midtop=(self.width // 2 + 10, 14)))
 
         avg_text = self.font.render(f"Avg: {self.average_reaction_ms()} ms", True, WHITE)
         screen.blit(avg_text, (self.width - 190, 10))
