@@ -1,5 +1,6 @@
 import pygame
 from .round import Round
+from .sounds import Sounds
 
 # Game Engine
 
@@ -44,6 +45,8 @@ class GameEngine:
         self.big_font = pygame.font.SysFont("Arial", 46)
         self.small_font = pygame.font.SysFont("Arial", 24)
 
+        self.sounds = Sounds()
+
         self.start_session(difficulty)
         self.in_menu = True  # show the start screen first; a choice starts the session
 
@@ -80,6 +83,8 @@ class GameEngine:
 
         reaction_ms = self.round.register_input()
         self.result_shown_at = pygame.time.get_ticks()
+        if self.round.state == "false_start":
+            self.sounds.play("false_start")
         # A false start returns None: it is shown to the player but is NOT
         # recorded, so it doesn't use up one of the rounds.
         if reaction_ms is not None:
@@ -115,7 +120,10 @@ class GameEngine:
         if self.in_menu or self.game_over:
             return
 
+        state_before = self.round.state
         self.round.update()
+        if state_before == "waiting" and self.round.state == "go":
+            self.sounds.play("go")  # the "go" cue, exactly when the screen turns green
 
         now = pygame.time.get_ticks()
         if self.round.state == "result":
@@ -129,6 +137,7 @@ class GameEngine:
         if len(self.reaction_times) >= self.rounds_total:
             self.game_over = True
             self.game_over_at = pygame.time.get_ticks()
+            self.sounds.play("end")
             return
         self.round = Round(self.min_wait_ms, self.max_wait_ms)
 
